@@ -1,115 +1,79 @@
-`default_nettype none
-`timescale 1ps/1ps
+// Code your design here
+module Asyn_fifo(wrclk,rdclk,rst,wr,rd,wdata,rdata,valid,empty,full,overflow,underflow);
+parameter datawidth=8;
+input wrclk,rdclk,rst,wr,rd;
+input [datawidth-1:0]wdata;
+output reg [datawidth-1:0]rdata;
+output valid,empty,full,overflow,underflow;
+parameter adress_size=4; 
+parameter fifo_depth=1<<adress_size;
+reg [adress_size-1:0]wr_pointer;
+reg [adress_size-1:0]rd_pointer;
+  reg [datawidth-1:0]mem[0:fifo_depth-1];
+wire [adress_size-1:0]wr_pointer_g;
+wire [adress_size-1:0]rd_pointer_g;
+reg  [adress_size-1:0]wr_pointer_g_s1;
+reg  [adress_size-1:0]wr_pointer_g_s2;
+reg  [adress_size-1:0]rd_pointer_g_s1;
+reg  [adress_size-1:0]rd_pointer_g_s2;
 
-module async_fifo #(
-    parameter DSIZE = 8,
-    parameter ASIZE = 4
-) (
-    input   wire                wreq,
-    input   wire                wclk,
-    input   wire                wrst_n,
-    input   wire                rreq,
-    input   wire                rclk,
-    input   wire                rrst_n,
-    input   wire [DSIZE-1:0]    wdata,
-    output  wire [DSIZE-1:0]    rdata,
-    output  reg                 wfull,
-    output  reg                 rempty
-);
-
-reg     [ASIZE:0]   wq2_rptr, wq1_rptr, rptr;
-reg     [ASIZE:0]   rq2_wptr, rq1_wptr, wptr;
-reg     [ASIZE:0]   rbin, wbin;
-wire    [ASIZE:0]   rptr_nxt, wptr_nxt;
-wire    [ASIZE-1:0] raddr, waddr;
-wire    [ASIZE-1:0] rbin_nxt, wbin_nxt;
-wire    rempty_val;
-
-// synchronizing rptr to wclk
-always @(posedge wclk or negedge wrst_n) begin
-    if(!wrst_n)
-        {wq2_rptr, wq1_rptr} <= 2'b0;
-    else
-        {wq2_rptr, wq1_rptr} <= {wq1_rptr, rptr};
+//Writing data to FIFO
+always@(posedge wrclk) begin
+if(rst)
+wr_pointer<=0;
+else begin
+if(wr&&!full) begin
+mem[wr_pointer]<=wdata;
+wr_pointer<=wr_pointer+1;
 end
-
-// synchronizing wptr to rclk
-always @(posedge rclk or negedge rrst_n) begin
-    if(!rrst_n)
-        {rq2_wptr, rq1_wptr} <= 2'b0;
-    else
-        {rq2_wptr, rq1_wptr} <= {rq1_wptr, wptr};
 end
-
-// generating rempty condition
-assign  rempty_val = (rptr_nxt == rq2_wptr); 
-
-always @(posedge rclk or negedge rrst_n) begin
-    if(!rrst_n)
-        rempty <= 1'b0;
-    else
-        rempty <= rempty_val;
 end
+//read data from FIFO
+always @(posedge rdclk) begin
+if(rst)
+rd_pointer<=0;
+else begin
+if(rd && !empty) begin
+rdata<=mem[rd_pointer];
+rd_pointer<=rd_pointer+1;
+end
+end
+end
+//write and read pointer to gray pointer
+assign wr_pointer_g=wr_pointer^(wr_pointer>>1);
+assign rd_pointer_g=rd_pointer^(rd_pointer>>1);
 
-// generating read address for fifomem
-assign rbin_nxt = rbin + (rreq & ~rempty);
+//2 stage synchroniser  for wr_pointer wrt rd_clk
+always @(posedge rdclk)
+begin
+if(rst) begin
+wr_pointer_g_s1<=0;
+wr_pointer_g_s2<=0;
+end
+else begin
+wr_pointer_g_s1<=wr_pointer_g;
+wr_pointer_g_s2<=wr_pointer_g_s1;
+end
+end
+//2 stage synchroniser for rd_pointer wrt wr_clk
+always @(posedge wrclk)
+begin
+if(rst) begin
+rd_pointer_g_s1<=0;
+rd_pointer_g_s2<=0;
+end
+else begin
+rd_pointer_g_s1<=rd_pointer_g;
+rd_pointer_g_s2<=rd_pointer_g_s1;
+end
+end
+//Empty and full condition check
+assign empty=rd_pointer_g==wr_pointer_g_s2;
+assign full=wr_pointer_g[adress_size-1]!=rd_pointer_g_s2[adress_size-1]
+&& wr_pointer_g[adress_size-2]!=rd_pointer_g_s2[adress_size-2] &&
+wr_pointer_g[adress_size-3:0]==rd_pointer_g_s2[adress_size-3:0];
 
-always @ (posedge rclk or negedge rrst_n) 
-    if (!rrst_n)
-        rbin <= 0;
-    else 
-        rbin <= rbin_nxt;
-assign raddr = rbin[ASIZE-1:0]; 
-
-// generating rptr to send to wclk domain
-// convert from binary to gray
-assign rptr_nxt = rbin_nxt ^ (rbin_nxt >> 1);
-
-always @ (posedge rclk or negedge rrst_n)
-    if (!rrst_n)
-        rptr <= 0;
-    else 
-        rptr <= rptr_nxt;
-
-// generating write address for fifomem
-assign wbin_nxt = wbin + (wreq & !wfull);
-
-always @ (posedge wclk or negedge wrst_n)
-    if(!wrst_n)
-        wbin <= 0;
-    else
-        wbin <= wbin_nxt;
-
-assign waddr = wbin[ASIZE-1:0];
-
-// generating wptr to send to rclk domain
-// convert from binary to gray
-assign wptr_nxt = (wbin_nxt >> 1) ^ wbin_nxt; 
-
-always @ (posedge wclk or negedge wrst_n)
-    if(!wrst_n)
-        wptr <= 0;
-    else
-        wptr <= wptr_nxt;
-
-// generate wfull condition
-wire wfull_val;
-assign wfull_val = (wq2_rptr == {~wptr[ASIZE : ASIZE-1], wptr[ASIZE-2 : 0]});
-
-always @ (posedge wclk or negedge wrst_n)
-    if (!wrst_n)
-        wfull <= 0;
-    else 
-        wfull <= wfull_val;
-
-// fifomem
-// Using Verilog memory model
-localparam DEPTH = (1 << (ASIZE));
-reg [DSIZE-1 : 0] mem [0: DEPTH -1];
-
-assign rdata = mem[raddr];
-
-always @ (posedge wclk)
-    if (wreq & !wfull) mem[waddr] <= wdata;
-
+assign overflow=full&&wr;
+assign underflow=empty&&rd;
+assign valid =rd && !empty;
 endmodule
